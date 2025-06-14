@@ -4,7 +4,7 @@ import threading
 import json
 import logging # Added logging import
 import pandas as pd
-from flask import Flask, render_template, redirect, url_for, request, flash
+from flask import Flask, render_template, redirect, url_for, request, flash, jsonify
 from binance.client import Client
 from binance.exceptions import BinanceAPIException, BinanceRequestException
 from binance import ThreadedWebsocketManager
@@ -317,9 +317,67 @@ def settings():
             return redirect(url_for('settings'))
 
 
+        # Store old values for comparison
+        old_symbol = cfg['symbol']
+        old_leverage = cfg['leverage']
+        old_api_key = cfg['api_key']
+        old_api_secret = cfg['api_secret']
+        old_interval = cfg['interval']
+
         save_config(new_cfg)
-        flash('Settings saved. Please restart the bot to apply major changes like API keys or symbol.', 'success')
-        logging.info(f"Settings updated: {new_cfg}")
+
+        # Reload global cfg object
+        global cfg
+        cfg = load_config()
+
+        # Re-initialize global operational variables
+        global API_KEY, API_SECRET, SYMBOL, INTERVAL, LEVERAGE, RISK_PER_TRADE, MAX_TRADES_PER_HOUR, TP_PERCENT, SL_PERCENT
+        API_KEY = cfg['api_key']
+        API_SECRET = cfg['api_secret']
+        SYMBOL = cfg['symbol']
+        INTERVAL = {'1m': Client.KLINE_INTERVAL_1MINUTE, '5m': Client.KLINE_INTERVAL_5MINUTE, '15m': Client.KLINE_INTERVAL_15MINUTE}.get(cfg['interval'], Client.KLINE_INTERVAL_1MINUTE)
+        LEVERAGE = cfg['leverage']
+        RISK_PER_TRADE = cfg['risk_per_trade']
+        MAX_TRADES_PER_HOUR = cfg['max_trades_per_hour']
+        TP_PERCENT = cfg['tp_percent']
+        SL_PERCENT = cfg['sl_percent']
+
+        logging.info(f"Settings updated and configuration reloaded: {cfg}")
+
+        # Handle API key changes
+        if API_KEY != old_api_key or API_SECRET != old_api_secret:
+            global client
+            client = None # Reset client to force reinitialization
+            init_client() # Attempt to reinitialize client with new keys
+            if client:
+                flash('Settings saved. API keys changed and client reinitialized. Consider restarting the bot for WebSocket to use new symbol/interval if changed.', 'success')
+            else:
+                flash('Settings saved. API keys changed but client failed to reinitialize. Check credentials. Restart required.', 'danger')
+        else:
+            # Attempt to update leverage if client is initialized and SYMBOL or LEVERAGE changed
+            if client and (SYMBOL != old_symbol or LEVERAGE != old_leverage):
+                try:
+                    client.futures_change_leverage(symbol=SYMBOL, leverage=LEVERAGE)
+                    logging.info(f"Leverage updated to {LEVERAGE} for {SYMBOL} via settings change.")
+                    flash_message = f'Settings saved. Leverage updated to {LEVERAGE} for {SYMBOL}.'
+                    if SYMBOL != old_symbol or cfg['interval'] != old_interval:
+                        flash_message += ' Restart bot for symbol/interval changes to take full effect (WebSocket).'
+                    flash(flash_message, 'success')
+                except Exception as e:
+                    logging.warning(f"Failed to update leverage via settings change: {e}")
+                    flash_message = f'Settings saved, but failed to update leverage on Binance: {e}.'
+                    if SYMBOL != old_symbol or cfg['interval'] != old_interval:
+                        flash_message += ' Restart bot for symbol/interval changes to take full effect (WebSocket).'
+                    flash(flash_message, 'warning')
+            else:
+                flash_message = 'Settings saved.'
+                if SYMBOL != old_symbol or cfg['interval'] != old_interval:
+                    flash_message += ' Restart bot for symbol/interval changes to take full effect (WebSocket).'
+                elif API_KEY == old_api_key and API_SECRET == old_api_secret and SYMBOL == old_symbol and LEVERAGE == old_leverage and cfg['interval'] == old_interval : # Only if no major changes
+                    flash_message = 'Settings saved. No major changes detected that require a restart.'
+                flash(flash_message, 'success' if 'Restart bot' not in flash_message else 'info')
+
+
         return redirect(url_for('settings'))
 
     return render_template('settings.html', cfg=cfg)
@@ -362,3 +420,30 @@ if __name__ == '__main__':
     else:
         logging.warning("WebSocket not started because Binance client failed to initialize.")
     app.run(host='0.0.0.0', port=5000)
+
+
+@app.route('/api/balance')
+def api_balance():
+    if not client or not API_KEY or not API_SECRET:
+        return jsonify({'error': 'Binance client not configured or not connected'}), 400
+
+    try:
+        balances = client.futures_account_balance()
+        usdt_balance = next((b for b in balances if b['asset'] == 'USDT'), None)
+        
+        if usdt_balance and 'balance' in usdt_balance:
+            balance_value = float(usdt_balance['balance'])
+            return jsonify({'balance': balance_value})
+        else:
+            logging.warning("USDT balance asset not found or 'balance' key missing in futures_account_balance response.")
+            return jsonify({'error': 'USDT balance not found'}), 404
+
+    except BinanceAPIException as e:
+        logging.error(f"Binance API Exception while fetching balance for /api/balance: {e}")
+        return jsonify({'error': 'Failed to fetch balance due to API error', 'details': str(e)}), 500
+    except BinanceRequestException as e:
+        logging.error(f"Binance Request Exception while fetching balance for /api/balance: {e}")
+        return jsonify({'error': 'Failed to fetch balance due to request error', 'details': str(e)}), 500
+    except Exception as e:
+        logging.error(f"Unexpected error while fetching balance for /api/balance: {e}", exc_info=True)
+        return jsonify({'error': 'An unexpected error occurred while fetching balance', 'details': str(e)}), 500
