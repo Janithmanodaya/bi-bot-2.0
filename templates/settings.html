@@ -1,0 +1,61 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <title>Bot Settings</title>
+  <style>
+    body { font-family: sans-serif; margin: 2rem; }
+    label { display: block; margin-top: 1rem; }
+    input, select { width: 100%; padding: 0.5rem; margin-top: 0.2rem; }
+    button { margin-top: 1rem; padding: 0.5rem 1rem; }
+    .flash { padding: 0.5rem; background: #e7f5e1; border: 1px solid #b5e7a0; margin-bottom: 1rem; }
+  </style>
+</head>
+<body>
+  <h1>Bot Settings</h1>
+  {% with messages = get_flashed_messages(with_categories=true) %}
+    {% if messages %}
+      {% for category, msg in messages %}
+        <div class="flash">{{ msg }}</div>
+      {% endfor %}
+    {% endif %}
+  {% endwith %}
+
+  <form method="post" action="/settings">
+    <label>API Key
+      <input type="text" name="api_key" value="{{ cfg.api_key }}" required>
+    </label>
+    <label>API Secret
+      <input type="text" name="api_secret" value="{{ cfg.api_secret }}" required>
+    </label>
+    <label>Symbol
+      <input type="text" name="symbol" value="{{ cfg.symbol }}">
+    </label>
+    <label>Interval
+      <select name="interval">
+        <option {% if cfg.interval=='1m' %}selected{% endif %}>1m</option>
+        <option {% if cfg.interval=='5m' %}selected{% endif %}>5m</option>
+        <option {% if cfg.interval=='15m' %}selected{% endif %}>15m</option>
+      </select>
+    </label>
+    <label>Leverage
+      <input type="number" name="leverage" value="{{ cfg.leverage }}">
+    </label>
+    <label>Risk per Trade (fraction)
+      <input type="number" step="0.001" name="risk_per_trade" value="{{ cfg.risk_per_trade }}">
+    </label>
+    <label>Max Trades per Hour
+      <input type="number" name="max_trades_per_hour" value="{{ cfg.max_trades_per_hour }}">
+    </label>
+    <label>Take-Profit % (e.g. 0.007 for 0.7%)
+      <input type="number" step="0.001" name="tp_percent" value="{{ cfg.tp_percent }}">
+    </label>
+    <label>Stop-Loss % (e.g. 0.005 for 0.5%)
+      <input type="number" step="0.001" name="sl_percent" value="{{ cfg.sl_percent }}">
+    </label>
+    <button type="submit">Save Settings</button>
+  </form>
+
+  <p><a href="/">Back to Dashboard</a></p>
+</body>
+</html>

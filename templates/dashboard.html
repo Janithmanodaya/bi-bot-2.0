@@ -1,0 +1,48 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <title>Scalp Bot Dashboard</title>
+  <style>
+    body { font-family: sans-serif; margin: 2rem; }
+    table { border-collapse: collapse; width: 100%; }
+    th, td { border: 1px solid #ddd; padding: 0.5rem; text-align: center; }
+    th { background: #f4f4f4; }
+    .btn { padding: 0.5rem 1rem; margin: 0.2rem; text-decoration: none; border: 1px solid #333; border-radius: 4px; }
+    .run { background: #4caf50; color: #fff; }
+    .stop { background: #f44336; color: #fff; }
+  </style>
+</head>
+<body>
+  <h1>Bot Status: {{ 'Running' if running else 'Stopped' }}</h1>
+  <p><strong>Trades this hour:</strong> {{ trades_count }}</p>
+  <p><strong>Total PnL:</strong> {{ '%.2f' % total_pnl }}</p>
+
+  {% if last_trade %}
+    <h2>Current Trade</h2>
+    <p>{{ last_trade.side }} @ {{ last_trade.entry }} ({{ last_trade.entry_time }})</p>
+    <a class="btn stop" href="/exit">Manual Exit</a>
+  {% endif %}
+
+  <h2>Trade History</h2>
+  <table>
+    <tr><th>Side</th><th>Entry</th><th>Exit</th><th>PnL</th><th>Entry Time</th><th>Exit Time</th></tr>
+    {% for t in history %}
+      <tr>
+        <td>{{ t.side }}</td>
+        <td>{{ t.entry }}</td>
+        <td>{{ t.exit }}</td>
+        <td>{{ '%.2f' % t.pnl }}</td>
+        <td>{{ t.entry_time }}</td>
+        <td>{{ t.exit_time }}</td>
+      </tr>
+    {% endfor %}
+  </table>
+
+  <p>
+    <a class="btn run" href="/start">Start Bot</a>
+    <a class="btn stop" href="/stop">Stop Bot</a>
+    <a class="btn" href="/settings">Settings</a>
+  </p>
+</body>
+</html>
