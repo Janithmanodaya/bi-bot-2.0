@@ -2,47 +2,129 @@
 <html lang="en">
 <head>
   <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>Scalp Bot Dashboard</title>
+  <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/css/bootstrap.min.css" rel="stylesheet">
   <style>
-    body { font-family: sans-serif; margin: 2rem; }
-    table { border-collapse: collapse; width: 100%; }
-    th, td { border: 1px solid #ddd; padding: 0.5rem; text-align: center; }
-    th { background: #f4f4f4; }
-    .btn { padding: 0.5rem 1rem; margin: 0.2rem; text-decoration: none; border: 1px solid #333; border-radius: 4px; }
-    .run { background: #4caf50; color: #fff; }
-    .stop { background: #f44336; color: #fff; }
+    /* Custom styles can go here if needed, but prefer Bootstrap classes */
+    .status-card { margin-bottom: 1rem; }
   </style>
 </head>
 <body>
-  <h1>Bot Status: {{ 'Running' if running else 'Stopped' }}</h1>
-  <p><strong>Trades this hour:</strong> {{ trades_count }}</p>
-  <p><strong>Total PnL:</strong> {{ '%.2f' % total_pnl }}</p>
+  <div class="container mt-4">
+    <header class="pb-3 mb-4 border-bottom">
+      <h1 class="display-4">Scalp Bot Dashboard</h1>
+    </header>
 
-  {% if last_trade %}
-    <h2>Current Trade</h2>
-    <p>{{ last_trade.side }} @ {{ last_trade.entry }} ({{ last_trade.entry_time }})</p>
-    <a class="btn stop" href="/exit">Manual Exit</a>
-  {% endif %}
+    <!-- Overall Status Section -->
+    <section id="overall-status" class="mb-4">
+      <div class="row">
+        <div class="col-md-6">
+          <div class="card status-card">
+            <div class="card-header">Bot Status</div>
+            <div class="card-body">
+              {% if running %}
+                <div class="alert alert-success" role="alert">Running</div>
+              {% else %}
+                <div class="alert alert-secondary" role="alert">Stopped</div>
+              {% endif %}
+            </div>
+          </div>
+        </div>
+        <div class="col-md-6">
+          <div class="card status-card">
+            <div class="card-header">Binance Connection</div>
+            <div class="card-body">
+              {% if connection_status %}
+                <div class="alert alert-success" role="alert">Status: Connected to Binance</div>
+                {% if balance_error_message %}
+                  <div class="alert alert-warning mt-2" role="alert">{{ balance_error_message }}</div>
+                {% endif %}
+                <p class="card-text mt-2"><strong>USDT Account Balance:</strong> {{ '%.2f' % balance if balance is not none else 'N/A' }}</p>
+              {% else %}
+                <div class="alert alert-danger" role="alert">Status: Disconnected - Check API Keys in Settings</div>
+              {% endif %}
+            </div>
+          </div>
+        </div>
+      </div>
+      <div class="row">
+        <div class="col-md-6">
+          <div class="card status-card">
+            <div class="card-header">Performance</div>
+            <div class="card-body">
+                <p class="card-text"><strong>Trades this hour:</strong> {{ trades_count }}</p>
+                <p class="card-text"><strong>Total PnL:</strong> {{ '%.2f' % total_pnl }} USDT</p>
+            </div>
+          </div>
+        </div>
+      </div>
+    </section>
 
-  <h2>Trade History</h2>
-  <table>
-    <tr><th>Side</th><th>Entry</th><th>Exit</th><th>PnL</th><th>Entry Time</th><th>Exit Time</th></tr>
-    {% for t in history %}
-      <tr>
-        <td>{{ t.side }}</td>
-        <td>{{ t.entry }}</td>
-        <td>{{ t.exit }}</td>
-        <td>{{ '%.2f' % t.pnl }}</td>
-        <td>{{ t.entry_time }}</td>
-        <td>{{ t.exit_time }}</td>
-      </tr>
-    {% endfor %}
-  </table>
+    <!-- Current Trade Section -->
+    {% if last_trade %}
+    <section id="current-trade" class="mb-4">
+      <div class="card">
+        <div class="card-header bg-primary text-white">
+          <h2 class="h4 mb-0">Current Trade</h2>
+        </div>
+        <div class="card-body">
+          <p class="card-text"><strong>Side:</strong> {{ last_trade.side }}</p>
+          <p class="card-text"><strong>Entry Price:</strong> {{ last_trade.entry }}</p>
+          <p class="card-text"><strong>Entry Time:</strong> {{ last_trade.entry_time }}</p>
+          <a class="btn btn-danger mt-2" href="/exit">Manual Exit Trade</a>
+        </div>
+      </div>
+    </section>
+    {% endif %}
 
-  <p>
-    <a class="btn run" href="/start">Start Bot</a>
-    <a class="btn stop" href="/stop">Stop Bot</a>
-    <a class="btn" href="/settings">Settings</a>
-  </p>
+    <!-- Trade History Section -->
+    <section id="trade-history" class="mb-4">
+      <h2 class="h3 mb-3">Trade History</h2>
+      <div class="table-responsive">
+        <table class="table table-striped table-hover table-bordered">
+          <thead class="table-dark">
+            <tr>
+              <th>Side</th>
+              <th>Entry</th>
+              <th>Exit</th>
+              <th>PnL (USDT)</th>
+              <th>Entry Time</th>
+              <th>Exit Time</th>
+            </tr>
+          </thead>
+          <tbody>
+            {% for t in history %}
+            <tr>
+              <td>{{ t.side }}</td>
+              <td>{{ t.entry }}</td>
+              <td>{{ t.exit }}</td>
+              <td>{{ '%.2f' % t.pnl }}</td>
+              <td>{{ t.entry_time }}</td>
+              <td>{{ t.exit_time }}</td>
+            </tr>
+            {% else %}
+            <tr>
+              <td colspan="6" class="text-center">No trades yet.</td>
+            </tr>
+            {% endfor %}
+          </tbody>
+        </table>
+      </div>
+    </section>
+
+    <!-- Actions Section -->
+    <section id="actions" class="mb-4 py-3 border-top">
+      <h2 class="h4 mb-3">Bot Actions</h2>
+      <p>
+        <a class="btn btn-success me-2" href="/start">Start Bot</a>
+        <a class="btn btn-danger me-2" href="/stop">Stop Bot</a>
+        <a class="btn btn-secondary" href="/settings">Settings</a>
+      </p>
+    </section>
+
+  </div> <!-- /container -->
+
+  <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/js/bootstrap.bundle.min.js"></script>
 </body>
 </html>
