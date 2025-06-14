@@ -2,60 +2,86 @@
 <html lang="en">
 <head>
   <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>Bot Settings</title>
-  <style>
-    body { font-family: sans-serif; margin: 2rem; }
-    label { display: block; margin-top: 1rem; }
-    input, select { width: 100%; padding: 0.5rem; margin-top: 0.2rem; }
-    button { margin-top: 1rem; padding: 0.5rem 1rem; }
-    .flash { padding: 0.5rem; background: #e7f5e1; border: 1px solid #b5e7a0; margin-bottom: 1rem; }
-  </style>
+  <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/css/bootstrap.min.css" rel="stylesheet">
 </head>
 <body>
-  <h1>Bot Settings</h1>
-  {% with messages = get_flashed_messages(with_categories=true) %}
-    {% if messages %}
-      {% for category, msg in messages %}
-        <div class="flash">{{ msg }}</div>
-      {% endfor %}
-    {% endif %}
-  {% endwith %}
+  <div class="container mt-4">
+    <header class="pb-3 mb-4 border-bottom">
+      <h1 class="display-4">Bot Settings</h1>
+    </header>
 
-  <form method="post" action="/settings">
-    <label>API Key
-      <input type="text" name="api_key" value="{{ cfg.api_key }}" required>
-    </label>
-    <label>API Secret
-      <input type="text" name="api_secret" value="{{ cfg.api_secret }}" required>
-    </label>
-    <label>Symbol
-      <input type="text" name="symbol" value="{{ cfg.symbol }}">
-    </label>
-    <label>Interval
-      <select name="interval">
-        <option {% if cfg.interval=='1m' %}selected{% endif %}>1m</option>
-        <option {% if cfg.interval=='5m' %}selected{% endif %}>5m</option>
-        <option {% if cfg.interval=='15m' %}selected{% endif %}>15m</option>
-      </select>
-    </label>
-    <label>Leverage
-      <input type="number" name="leverage" value="{{ cfg.leverage }}">
-    </label>
-    <label>Risk per Trade (fraction)
-      <input type="number" step="0.001" name="risk_per_trade" value="{{ cfg.risk_per_trade }}">
-    </label>
-    <label>Max Trades per Hour
-      <input type="number" name="max_trades_per_hour" value="{{ cfg.max_trades_per_hour }}">
-    </label>
-    <label>Take-Profit % (e.g. 0.007 for 0.7%)
-      <input type="number" step="0.001" name="tp_percent" value="{{ cfg.tp_percent }}">
-    </label>
-    <label>Stop-Loss % (e.g. 0.005 for 0.5%)
-      <input type="number" step="0.001" name="sl_percent" value="{{ cfg.sl_percent }}">
-    </label>
-    <button type="submit">Save Settings</button>
-  </form>
+    {% with messages = get_flashed_messages(with_categories=true) %}
+      {% if messages %}
+        {% for category, msg in messages %}
+          <div class="alert alert-success alert-dismissible fade show" role="alert">
+            {{ msg }}
+            <button type="button" class="btn-close" data-bs-dismiss="alert" aria-label="Close"></button>
+          </div>
+        {% endfor %}
+      {% endif %}
+    {% endwith %}
 
-  <p><a href="/">Back to Dashboard</a></p>
+    <form method="post" action="/settings">
+      <div class="mb-3">
+        <label for="api_key" class="form-label">API Key</label>
+        <input type="text" class="form-control" id="api_key" name="api_key" value="{{ cfg.api_key }}" required>
+      </div>
+
+      <div class="mb-3">
+        <label for="api_secret" class="form-label">API Secret</label>
+        <input type="text" class="form-control" id="api_secret" name="api_secret" value="{{ cfg.api_secret }}" required>
+      </div>
+
+      <div class="mb-3">
+        <label for="symbol" class="form-label">Trading Symbol (e.g., BTCUSDT)</label>
+        <input type="text" class="form-control" id="symbol" name="symbol" value="{{ cfg.symbol }}">
+      </div>
+
+      <div class="mb-3">
+        <label for="interval" class="form-label">Candlestick Interval</label>
+        <select class="form-select" id="interval" name="interval">
+          <option value="1m" {% if cfg.interval=='1m' %}selected{% endif %}>1 Minute</option>
+          <option value="3m" {% if cfg.interval=='3m' %}selected{% endif %}>3 Minutes</option>
+          <option value="5m" {% if cfg.interval=='5m' %}selected{% endif %}>5 Minutes</option>
+          <option value="15m" {% if cfg.interval=='15m' %}selected{% endif %}>15 Minutes</option>
+          <option value="30m" {% if cfg.interval=='30m' %}selected{% endif %}>30 Minutes</option>
+          <option value="1h" {% if cfg.interval=='1h' %}selected{% endif %}>1 Hour</option>
+        </select>
+      </div>
+
+      <div class="mb-3">
+        <label for="leverage" class="form-label">Leverage</label>
+        <input type="number" class="form-control" id="leverage" name="leverage" value="{{ cfg.leverage }}" min="1">
+      </div>
+
+      <div class="mb-3">
+        <label for="risk_per_trade" class="form-label">Risk per Trade (e.g., 0.01 for 1% of balance)</label>
+        <input type="number" class="form-control" id="risk_per_trade" name="risk_per_trade" value="{{ cfg.risk_per_trade }}" step="0.001" min="0.001" max="0.1">
+      </div>
+
+      <div class="mb-3">
+        <label for="max_trades_per_hour" class="form-label">Max Trades per Hour</label>
+        <input type="number" class="form-control" id="max_trades_per_hour" name="max_trades_per_hour" value="{{ cfg.max_trades_per_hour }}" min="1">
+      </div>
+
+      <div class="mb-3">
+        <label for="tp_percent" class="form-label">Take-Profit % (e.g., 0.007 for 0.7%)</label>
+        <input type="number" class="form-control" id="tp_percent" name="tp_percent" value="{{ cfg.tp_percent }}" step="0.001" min="0.001">
+      </div>
+
+      <div class="mb-3">
+        <label for="sl_percent" class="form-label">Stop-Loss % (e.g., 0.005 for 0.5%)</label>
+        <input type="number" class="form-control" id="sl_percent" name="sl_percent" value="{{ cfg.sl_percent }}" step="0.001" min="0.001">
+      </div>
+
+      <button type="submit" class="btn btn-primary">Save Settings</button>
+    </form>
+
+    <p class="mt-4"><a href="/" class="btn btn-secondary">Back to Dashboard</a></p>
+  </div>
+
+  <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/js/bootstrap.bundle.min.js"></script>
 </body>
 </html>

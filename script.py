@@ -2,10 +2,15 @@ import os
 import time
 import threading
 import json
+import logging # Added logging import
 import pandas as pd
 from flask import Flask, render_template, redirect, url_for, request, flash
 from binance.client import Client
+from binance.exceptions import BinanceAPIException, BinanceRequestException
 from binance import ThreadedWebsocketManager
+
+# ======== Logging Configuration ========
+logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
 
 # ======== Config File ========
 CONFIG_PATH = 'config.json'
@@ -63,14 +68,20 @@ client = None
 # ======== Client init ========
 def init_client():
     global client
+    logging.info("Initializing Binance client.")
     if not API_KEY or not API_SECRET:
-        print("[ERROR] Missing API credentials.")
+        logging.error("Missing API credentials. Cannot initialize client.")
+        # print("[ERROR] Missing API credentials.") # Replaced by logging
         return
-    client = Client(API_KEY, API_SECRET, testnet=True)
+    client = Client(API_KEY, API_SECRET, testnet=False)
     try:
         client.futures_change_leverage(symbol=SYMBOL, leverage=LEVERAGE)
+        logging.info(f"Leverage set to {LEVERAGE} for {SYMBOL}.")
     except Exception as e:
-        print(f"[WARN] Leverage set failed: {e}")
+        logging.warning(f"Leverage set failed for {SYMBOL} with leverage {LEVERAGE}: {e}")
+        # print(f"[WARN] Leverage set failed: {e}") # Replaced by logging
+    logging.info("Binance client initialized successfully.")
+
 
 # ======== Indicators (no TA-Lib) ========
 def ema(series, period): return series.ewm(span=period, adjust=False).mean()
@@ -81,6 +92,8 @@ def rsi(series, period):
     loss = -delta.clip(upper=0)
     avg_gain = gain.rolling(period).mean()
     avg_loss = loss.rolling(period).mean()
+    if avg_loss.eq(0).any(): # Avoid division by zero if all losses are 0
+        return pd.Series(100.0, index=series.index) if avg_gain.gt(0).any() else pd.Series(50.0, index=series.index)
     rs = avg_gain / avg_loss
     return 100 - (100 / (1 + rs))
 
@@ -96,14 +109,16 @@ def supertrend(df, period=10, mult=3):
     hl2 = (df['high'] + df['low']) / 2
     upper = hl2 + mult * atr_s
     lower = hl2 - mult * atr_s
-    st = [True]
+    st = [True] * len(df) # Initialize with True
+    if len(df) == 0: return pd.Series(st, index=df.index) # Handle empty DataFrame
+
     for i in range(1, len(df)):
         if df['close'].iat[i] > upper.iat[i-1]:
-            st.append(True)
+            st[i] = True
         elif df['close'].iat[i] < lower.iat[i-1]:
-            st.append(False)
+            st[i] = False
         else:
-            st.append(st[i-1])
+            st[i] = st[i-1]
     return pd.Series(st, index=df.index)
 
 # ======== Trade utils ========
@@ -114,11 +129,13 @@ def can_trade():
     return len(trades_last_hour) < MAX_TRADES_PER_HOUR
 
 def in_position():
+    if not client: return False # Ensure client is initialized
     pos = client.futures_position_information(symbol=SYMBOL)
     return float(next(p['positionAmt'] for p in pos if p['symbol']==SYMBOL)) != 0
 
 def calc_qty(price):
-    bal = float(client.futures_account_balance()[0]['balance'])
+    if not client: return 0 # Ensure client is initialized
+    bal = float(client.futures_account_balance()[0]['balance']) # Consider error handling here too if needed
     return round((bal * RISK_PER_TRADE * LEVERAGE) / price, 3)
 
 def record_trade(exit_p=None):
@@ -126,57 +143,108 @@ def record_trade(exit_p=None):
     if not current_trade or exit_p is None: return
     pnl = ((exit_p - current_trade['entry']) if current_trade['side']=='BUY' else (current_trade['entry'] - exit_p)) * current_trade['qty']
     current_trade.update({'exit': exit_p, 'exit_time': time.strftime('%Y-%m-%d %H:%M:%S'), 'pnl': pnl})
-    trade_history.append(current_trade)
+    trade_history.append(current_trade.copy()) # Use .copy() to avoid issues with dict reuse
+    logging.info(f"Trade recorded: {current_trade}")
     current_trade = None
 
 def enter_order(side, price):
     global current_trade
+    if not client:
+        logging.error("Cannot enter order: Binance client not initialized.")
+        return
     qty = calc_qty(price)
-    client.futures_create_order(symbol=SYMBOL, side=side, type='MARKET', quantity=qty)
-    trades_last_hour.append(time.time())
-    current_trade = {'side': side, 'entry': price, 'entry_time': time.strftime('%Y-%m-%d %H:%M:%S'), 'qty': qty}
+    if qty <= 0:
+        logging.warning(f"Calculated quantity is {qty}. Cannot place order for {SYMBOL}.")
+        return
+    try:
+        client.futures_create_order(symbol=SYMBOL, side=side, type='MARKET', quantity=qty)
+        trades_last_hour.append(time.time())
+        current_trade = {'side': side, 'entry': price, 'entry_time': time.strftime('%Y-%m-%d %H:%M:%S'), 'qty': qty}
+        logging.info(f"Entering {side} order for {SYMBOL} at {price}, quantity {qty}.")
+    except Exception as e:
+        logging.error(f"Failed to enter {side} order for {SYMBOL} at {price}, qty {qty}: {e}")
+
 
 def exit_position():
+    if not client:
+        logging.error("Cannot exit position: Binance client not initialized.")
+        return
     pos = client.futures_position_information(symbol=SYMBOL)
     amt = float(next(p['positionAmt'] for p in pos if p['symbol']==SYMBOL))
-    if amt == 0: return
-    side = 'SELL' if amt>0 else 'BUY'
+    if amt == 0:
+        logging.info(f"No position to exit for {SYMBOL}.")
+        return
+    side = 'SELL' if amt > 0 else 'BUY'
     price = float(client.futures_mark_price(symbol=SYMBOL)['markPrice'])
-    client.futures_create_order(symbol=SYMBOL, side=side, type='MARKET', quantity=abs(amt))
-    record_trade(price)
+    try:
+        client.futures_create_order(symbol=SYMBOL, side=side, type='MARKET', quantity=abs(amt))
+        logging.info(f"Exiting position for {SYMBOL}. Side: {side}, Quantity: {abs(amt)}, Price: {price}.")
+        record_trade(price) # record_trade is called after successful exit
+    except Exception as e:
+        logging.error(f"Failed to exit {side} position for {SYMBOL}, qty {abs(amt)}: {e}")
+
 
 # ======== Core strategy ========
 def on_new_candle(c):
     global history
+    logging.debug(f"Processing new candle: {c}")
     if not in_session or not c or 'time' not in c: return
-    history = history.append(c, ignore_index=True).iloc[-HISTORY_LEN:]
+
+    # Ensure c is a dictionary before attempting to append
+    if not isinstance(c, dict):
+        logging.warning(f"on_new_candle received non-dict candle data: {c}")
+        return
+
+    history = history.append(c, ignore_index=True)
+    if len(history) > HISTORY_LEN: # Keep history to specified length
+        history = history.iloc[-HISTORY_LEN:]
+
     if len(history) < max(EMA_LONG, RSI_PERIOD, VOL_LOOKBACK): return
+
     df = history.copy().reset_index(drop=True)
     df['ema9'], df['ema20'], df['ema50'] = ema(df['close'], EMA_SHORT), ema(df['close'], EMA_MED), ema(df['close'], EMA_LONG)
     df['rsi'], df['vol_avg'], df['supertrend'] = rsi(df['close'], RSI_PERIOD), df['volume'].rolling(VOL_LOOKBACK).mean(), supertrend(df)
+
+    if df.empty:
+        logging.debug("DataFrame is empty in on_new_candle after indicator calculation.")
+        return
+
     last, prev = df.iloc[-1], df.iloc[-2]
     p = last['close']
+
     # exit
     if in_position() and current_trade:
-        if ((current_trade['side']=='BUY' and (p>=current_trade['entry']*(1+TP_PERCENT) or p<=current_trade['entry']*(1-SL_PERCENT))) or
-           (current_trade['side']=='SELL' and (p<=current_trade['entry']*(1-TP_PERCENT) or p>=current_trade['entry']*(1+SL_PERCENT)))):
+        tp_price_buy = current_trade['entry'] * (1 + TP_PERCENT)
+        sl_price_buy = current_trade['entry'] * (1 - SL_PERCENT)
+        tp_price_sell = current_trade['entry'] * (1 - TP_PERCENT)
+        sl_price_sell = current_trade['entry'] * (1 + SL_PERCENT)
+
+        if ((current_trade['side']=='BUY' and (p >= tp_price_buy or p <= sl_price_buy)) or
+           (current_trade['side']=='SELL' and (p <= tp_price_sell or p >= sl_price_sell))):
+            logging.info(f"Exit condition met for {current_trade['side']} {SYMBOL}. Current price: {p}, Entry: {current_trade['entry']}")
             exit_position()
     # entry
     if can_trade() and not in_position():
         if (prev['ema9']<prev['ema20']<prev['ema50'] and last['ema9']>last['ema20']>last['ema50'] and last['supertrend'] and 30<last['rsi']<70 and last['volume']>VOL_MULT*last['vol_avg']):
+            logging.info(f"Entry condition met for BUY signal on {SYMBOL} at price {p}")
             enter_order('BUY', p)
         if (prev['ema9']>prev['ema20']>prev['ema50'] and last['ema9']<last['ema20']<last['ema50'] and not last['supertrend'] and 30<last['rsi']<70 and last['volume']>VOL_MULT*last['vol_avg']):
+            logging.info(f"Entry condition met for SELL signal on {SYMBOL} at price {p}")
             enter_order('SELL', p)
 
 # ======== WebSocket ========
 def start_ws():
+    logging.info("Starting WebSocket connection.")
     twm = ThreadedWebsocketManager(api_key=API_KEY, api_secret=API_SECRET)
     twm.start()
     def handle_msg(msg):
+        logging.debug(f"WebSocket message received: {msg}")
         k = msg.get('k', {})
-        if k.get('x'):
-            on_new_candle({'open': float(k['o']), 'high': float(k['h']), 'low': float(k['l']), 'close': float(k['c']), 'volume': float(k['v']), 'time': k['t']})
+        if k.get('x'): # Is candle closed?
+            candle_data = {'open': float(k['o']), 'high': float(k['h']), 'low': float(k['l']), 'close': float(k['c']), 'volume': float(k['v']), 'time': k['t']}
+            on_new_candle(candle_data)
     twm.start_kline_socket(callback=handle_msg, symbol=SYMBOL, interval=INTERVAL)
+    # twm.join() # This would block, not suitable for Flask thread
 
 # ======== Flask App ========
 app = Flask(__name__, template_folder='templates')
@@ -189,6 +257,7 @@ def dashboard():
     """
     # Determine connection status
     connection_status = bool(client and API_KEY and API_SECRET)
+    balance_error_message = None
 
     # Fetch USDT futures balance if connected
     balance = None
@@ -197,8 +266,22 @@ def dashboard():
             balances = client.futures_account_balance()
             usdt = next((b for b in balances if b['asset'] == 'USDT'), None)
             balance = float(usdt['balance']) if usdt else None
-        except Exception:
+        except BinanceAPIException as e:
             balance = None
+            balance_error_message = f"API Error: Could not fetch balance. Please check API credentials. (Error: {e.message})"
+            # print(f"[ERROR] Fetching balance failed (API Exception): {e}") # Replaced by logging
+            logging.error(f"Failed to fetch account balance (API Exception): {e.message}")
+        except BinanceRequestException as e:
+            balance = None
+            balance_error_message = f"Network Error: Could not fetch balance. Please check your internet connection. (Error: {e.message})"
+            # print(f"[ERROR] Fetching balance failed (Request Exception): {e}") # Replaced by logging
+            logging.error(f"Failed to fetch account balance (Request Exception): {e.message}")
+        except Exception as e:
+            balance = None
+            balance_error_message = f"An unexpected error occurred while fetching balance: {e}"
+            # print(f"[ERROR] Fetching balance failed (Unexpected Exception): {e}") # Replaced by logging
+            logging.error(f"Failed to fetch account balance (Unexpected Exception): {e}", exc_info=True)
+
 
     # Compute total PnL
     total_pnl = sum(t.get('pnl', 0) for t in trade_history)
@@ -212,7 +295,8 @@ def dashboard():
         history=trade_history,
         total_pnl=total_pnl,
         balance=balance,
-        connection_status=connection_status
+        connection_status=connection_status,
+        balance_error_message=balance_error_message
     )
 
 @app.route('/settings', methods=['GET', 'POST'])
@@ -222,14 +306,20 @@ def settings():
         for key in ['api_key', 'api_secret', 'symbol', 'interval']:
             new_cfg[key] = request.form.get(key)
         # Numeric values
-        new_cfg['leverage'] = int(request.form.get('leverage'))
-        new_cfg['risk_per_trade'] = float(request.form.get('risk_per_trade'))
-        new_cfg['max_trades_per_hour'] = int(request.form.get('max_trades_per_hour'))
-        new_cfg['tp_percent'] = float(request.form.get('tp_percent'))
-        new_cfg['sl_percent'] = float(request.form.get('sl_percent'))
+        try:
+            new_cfg['leverage'] = int(request.form.get('leverage'))
+            new_cfg['risk_per_trade'] = float(request.form.get('risk_per_trade'))
+            new_cfg['max_trades_per_hour'] = int(request.form.get('max_trades_per_hour'))
+            new_cfg['tp_percent'] = float(request.form.get('tp_percent'))
+            new_cfg['sl_percent'] = float(request.form.get('sl_percent'))
+        except (ValueError, TypeError) as e:
+            flash(f'Invalid numeric input: {e}', 'danger')
+            return redirect(url_for('settings'))
+
 
         save_config(new_cfg)
-        flash('Settings saved. Please restart the bot to apply.', 'success')
+        flash('Settings saved. Please restart the bot to apply major changes like API keys or symbol.', 'success')
+        logging.info(f"Settings updated: {new_cfg}")
         return redirect(url_for('settings'))
 
     return render_template('settings.html', cfg=cfg)
@@ -237,22 +327,38 @@ def settings():
 @app.route('/start')
 def start_bot():
     global in_session
-    init_client()
+    if not client: # Check if client was initialized
+        init_client() # Attempt to initialize if not already
+        if not client: # If still not initialized (e.g. missing keys)
+             flash('Cannot start bot: Binance client not initialized. Check API keys.', 'danger')
+             logging.error("Bot start failed: Binance client could not be initialized.")
+             return redirect(url_for('dashboard'))
+
     in_session = True
+    logging.info("Bot started.")
+    flash('Bot started successfully!', 'success')
     return redirect(url_for('dashboard'))
 
 @app.route('/stop')
 def stop_bot():
     global in_session
     in_session = False
+    logging.info("Bot stopped.")
+    flash('Bot stopped.', 'info')
     return redirect(url_for('dashboard'))
 
 @app.route('/exit')
 def manual_exit():
+    logging.info("Manual exit initiated.")
     exit_position()
+    flash('Manual exit attempt processed.', 'info') # Message updated for clarity
     return redirect(url_for('dashboard'))
 
 if __name__ == '__main__':
-    init_client()
-    threading.Thread(target=start_ws, daemon=True).start()
+    logging.info("Application starting.")
+    init_client() # Initialize client on startup
+    if client: # Only start WebSocket if client initialized
+        threading.Thread(target=start_ws, daemon=True).start()
+    else:
+        logging.warning("WebSocket not started because Binance client failed to initialize.")
     app.run(host='0.0.0.0', port=5000)
